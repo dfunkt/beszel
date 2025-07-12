@@ -19,7 +19,6 @@ export default function () {
 
 	useEffect(() => {
 		document.title = t`Login` + " / Beszel"
-
 		pb.send("/api/beszel/first-run", {}).then(({ firstRun }) => {
 			setFirstRun(firstRun)
 		})
@@ -32,6 +31,26 @@ export default function () {
 				setAuthMethods(methods)
 			})
 	}, [])
+
+	// OAuth Auto Redirect Logic
+	useEffect(() => {
+		if (!authMethods || isFirstRun || page?.route === "forgot_password") {
+			return
+		}
+
+		// Check if conditions are met for auto redirect
+		const passwordDisabled = !authMethods.usernamePassword
+		const oauthProviders = authMethods.authProviders || []
+		
+		// Only auto-redirect if password auth is disabled AND exactly one OAuth provider
+		if (passwordDisabled && oauthProviders.length === 1) {
+			const provider = oauthProviders[0]
+			// Small delay for better UX
+			setTimeout(() => {
+				window.location.href = provider.authUrl + pb.baseUrl + '/api/oauth2-redirect'
+			}, 500)
+		}
+	}, [authMethods, isFirstRun, page])
 
 	const subtitle = useMemo(() => {
 		if (isFirstRun) {
