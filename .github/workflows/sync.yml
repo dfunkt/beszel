@@ -1,0 +1,79 @@
+name: Sync Fork with Upstream
+
+on:
+  workflow_dispatch:
+
+env:
+  SOURCE_REPO: "henrygd/beszel"
+  DESTINATION_REPO: "${{ github.repository }}"
+
+jobs:
+  Sync:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Generate GitHub App Token
+        id: generate_token
+        uses: actions/create-github-app-token@v2
+        with:
+          app-id: ${{ secrets.APP_ID }}
+          private-key: ${{ secrets.PRIVATE_KEY }}
+
+      - name: Checkout
+        uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+          token: ${{ steps.generate_token.outputs.token }}
+
+      - name: Configure Git
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+      - name: Get latest upstream release
+        id: check
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          # Get latest release from upstream using GitHub API
+          LATEST_RELEASE=$(gh release list \
+            --repo "${{ env.SOURCE_REPO }}" \
+            --limit 1 \
+            --json tagName,isPrerelease \
+            --jq '.[] | select(.isPrerelease == false) | .tagName')
+
+          echo "latest_tag=$LATEST_RELEASE" >> $GITHUB_OUTPUT
+          echo "Latest upstream release: $LATEST_RELEASE"
+
+          # Check if this release exists locally
+          if git rev-parse "$LATEST_RELEASE" >/dev/null 2>&1; then
+            echo "has_new=false" >> $GITHUB_OUTPUT
+            echo "Release $LATEST_RELEASE already exists locally"
+          else
+            echo "has_new=true" >> $GITHUB_OUTPUT
+            echo "New release $LATEST_RELEASE found!"
+          fi
+
+      - name: Add upstream remote
+        if: steps.check.outputs.has_new == 'true'
+        run: |
+          git remote add upstream https://github.com/${{ env.SOURCE_REPO }}.git
+          git fetch upstream
+
+      - name: Create PR for new release
+        if: steps.check.outputs.has_new == 'true'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          TAG=${{ steps.check.outputs.latest_tag }}
+          BRANCH="sync-upstream-$TAG"
+
+          git checkout -b "$BRANCH" "$TAG"
+          git push origin "$BRANCH"
+
+          gh pr create \
+            --repo "${{ env.DESTINATION_REPO }}" \
+            --title "Sync with upstream release $TAG" \
+            --body "Auto-sync with upstream release $TAG from parent repository" \
+            --base "main" \
+            --head "$BRANCH"
