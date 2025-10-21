@@ -1,0 +1,70 @@
+name: Sync Fork with Upstream
+
+on:
+  workflow_dispatch:
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      pull-requests: write
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+
+      - name: Configure Git
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+
+      - name: Get latest upstream release
+        id: check
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          # Get latest release from upstream using GitHub API
+          LATEST_RELEASE=$(gh release list \
+            --repo henrygd/beszel \
+            --limit 1 \
+            --json tagName,isPrerelease \
+            --jq '.[] | select(.isPrerelease == false) | .tagName')
+
+          echo "latest_tag=$LATEST_RELEASE" >> $GITHUB_OUTPUT
+          echo "Latest upstream release: $LATEST_RELEASE"
+
+          # Check if this release exists locally
+          if git rev-parse "$LATEST_RELEASE" >/dev/null 2>&1; then
+            echo "has_new=false" >> $GITHUB_OUTPUT
+            echo "Release $LATEST_RELEASE already exists locally"
+          else
+            echo "has_new=true" >> $GITHUB_OUTPUT
+            echo "New release $LATEST_RELEASE found!"
+          fi
+
+      - name: Add upstream remote
+        if: steps.check.outputs.has_new == 'true'
+        run: |
+          git remote add upstream https://github.com/henrygd/beszel.git
+          git fetch upstream
+
+      - name: Create PR for new release
+        if: steps.check.outputs.has_new == 'true'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          TAG=${{ steps.check.outputs.latest_tag }}
+          BRANCH="sync-upstream-$TAG"
+
+          git checkout -b "$BRANCH"
+          git merge "$TAG" --no-edit || true
+          git push origin "$BRANCH"
+
+          gh pr create \
+            --repo "dfunkt/beszel" \
+            --title "Sync with upstream release $TAG" \
+            --body "Auto-sync with upstream release $TAG from parent repository" \
+            --base main \
+            --head "$BRANCH"
