@@ -41,6 +41,7 @@ import { useIntersectionObserver } from "@/lib/use-intersection-observer"
 import {
 	chartTimeData,
 	cn,
+	compareSemVer,
 	debounce,
 	decimalString,
 	formatBytes,
@@ -170,8 +171,9 @@ export default memo(function SystemDetail({ id }: { id: string }) {
 	const [system, setSystem] = useState({} as SystemRecord)
 	const [systemStats, setSystemStats] = useState([] as SystemStatsRecord[])
 	const [containerData, setContainerData] = useState([] as ChartData["containerData"])
-	const netCardRef = useRef<HTMLDivElement>(null)
+	const temperatureChartRef = useRef<HTMLDivElement>(null)
 	const persistChartTime = useRef(false)
+	const [bottomSpacing, setBottomSpacing] = useState(0)
 	const [chartLoading, setChartLoading] = useState(true)
 	const isLongerChart = !["1m", "1h"].includes(chartTime) // true if chart time is not 1m or 1h
 	const userSettings = $userSettings.get()
@@ -396,6 +398,21 @@ export default memo(function SystemDetail({ id }: { id: string }) {
 		}[]
 	}, [system, t])
 
+	/** Space for tooltip if more than 10 sensors and no containers table */
+	useEffect(() => {
+		const sensors = Object.keys(systemStats.at(-1)?.stats.t ?? {})
+		if (!temperatureChartRef.current || sensors.length < 10 || containerData.length > 0) {
+			setBottomSpacing(0)
+			return
+		}
+		const tooltipHeight = (sensors.length - 10) * 17.8 - 40
+		const wrapperEl = chartWrapRef.current as HTMLDivElement
+		const wrapperRect = wrapperEl.getBoundingClientRect()
+		const chartRect = temperatureChartRef.current.getBoundingClientRect()
+		const distanceToBottom = wrapperRect.bottom - chartRect.bottom
+		setBottomSpacing(tooltipHeight - distanceToBottom)
+	}, [])
+
 	// keyboard navigation between systems
 	useEffect(() => {
 		if (!systems.length) {
@@ -555,6 +572,18 @@ export default memo(function SystemDetail({ id }: { id: string }) {
 						</div>
 					</div>
 				</Card>
+
+
+				{/* <Tabs defaultValue="overview" className="w-full">
+					<TabsList className="w-full h-11">
+						<TabsTrigger value="overview" className="w-full h-9">Overview</TabsTrigger>
+						<TabsTrigger value="containers" className="w-full h-9">Containers</TabsTrigger>
+						<TabsTrigger value="smart" className="w-full h-9">S.M.A.R.T.</TabsTrigger>
+					</TabsList>
+					<TabsContent value="smart">
+					</TabsContent>
+				</Tabs> */}
+
 
 				{/* main charts */}
 				<div className="grid xl:grid-cols-2 gap-4">
@@ -728,26 +757,20 @@ export default memo(function SystemDetail({ id }: { id: string }) {
 					</ChartCard>
 
 					{containerFilterBar && containerData.length > 0 && (
-						<div
-							ref={netCardRef}
-							className={cn({
-								"col-span-full": !grid,
-							})}
+						<ChartCard
+							empty={dataEmpty}
+							grid={grid}
+							title={dockerOrPodman(t`Docker Network I/O`, system)}
+							description={dockerOrPodman(t`Network traffic of docker containers`, system)}
+							cornerEl={containerFilterBar}
 						>
-							<ChartCard
-								empty={dataEmpty}
-								title={dockerOrPodman(t`Docker Network I/O`, system)}
-								description={dockerOrPodman(t`Network traffic of docker containers`, system)}
-								cornerEl={containerFilterBar}
-							>
-								<ContainerChart
-									chartData={chartData}
-									chartType={ChartType.Network}
-									dataKey="n"
-									chartConfig={containerChartConfigs.network}
-								/>
-							</ChartCard>
-						</div>
+							<ContainerChart
+								chartData={chartData}
+								chartType={ChartType.Network}
+								dataKey="n"
+								chartConfig={containerChartConfigs.network}
+							/>
+						</ChartCard>
 					)}
 
 					{/* Swap chart */}
@@ -777,16 +800,21 @@ export default memo(function SystemDetail({ id }: { id: string }) {
 
 					{/* Temperature chart */}
 					{systemStats.at(-1)?.stats.t && (
-						<ChartCard
-							empty={dataEmpty}
-							grid={grid}
-							title={t`Temperature`}
-							description={t`Temperatures of system sensors`}
-							cornerEl={<FilterBar store={$temperatureFilter} />}
-							legend={Object.keys(systemStats.at(-1)?.stats.t ?? {}).length < 12}
+						<div
+							ref={temperatureChartRef}
+							className={cn("odd:last-of-type:col-span-full", { "col-span-full": !grid })}
 						>
-							<TemperatureChart chartData={chartData} />
-						</ChartCard>
+							<ChartCard
+								empty={dataEmpty}
+								grid={grid}
+								title={t`Temperature`}
+								description={t`Temperatures of system sensors`}
+								cornerEl={<FilterBar store={$temperatureFilter} />}
+								legend={Object.keys(systemStats.at(-1)?.stats.t ?? {}).length < 12}
+							>
+								<TemperatureChart chartData={chartData} />
+							</ChartCard>
+						</div>
 					)}
 
 					{/* Battery chart */}
@@ -974,10 +1002,18 @@ export default memo(function SystemDetail({ id }: { id: string }) {
 						})}
 					</div>
 				)}
-				{id && containerData.length > 0 && (
+
+				{compareSemVer(chartData.agentVersion, parseSemVer("0.15.0")) >= 0 && (
+					<LazySmartTable systemId={system.id} />
+				)}
+
+				{containerData.length > 0 && compareSemVer(chartData.agentVersion, parseSemVer("0.14.0")) >= 0 && (
 					<LazyContainersTable systemId={id} />
 				)}
 			</div>
+
+			{/* add space for tooltip if lots of sensors */}
+			{bottomSpacing > 0 && <span className="block" style={{ height: bottomSpacing }} />}
 		</>
 	)
 })
@@ -1107,10 +1143,21 @@ export function ChartCard({
 const ContainersTable = lazy(() => import("../containers-table/containers-table"))
 
 function LazyContainersTable({ systemId }: { systemId: string }) {
-	const { isIntersecting, ref } = useIntersectionObserver()
+	const { isIntersecting, ref } = useIntersectionObserver({ rootMargin: "90px" })
 	return (
-		<div ref={ref}>
+		<div ref={ref} className={cn(isIntersecting && "contents")}>
 			{isIntersecting && <ContainersTable systemId={systemId} />}
+		</div>
+	)
+}
+
+const SmartTable = lazy(() => import("./system/smart-table"))
+
+function LazySmartTable({ systemId }: { systemId: string }) {
+	const { isIntersecting, ref } = useIntersectionObserver({ rootMargin: "90px" })
+	return (
+		<div ref={ref} className={cn(isIntersecting && "contents")}>
+			{isIntersecting && <SmartTable systemId={systemId} />}
 		</div>
 	)
 }

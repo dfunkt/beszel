@@ -8,7 +8,7 @@ import {
 	ClockIcon,
 	ContainerIcon,
 	CpuIcon,
-	HashIcon,
+	LayersIcon,
 	MemoryStickIcon,
 	ServerIcon,
 	ShieldCheckIcon,
@@ -19,6 +19,20 @@ import { t } from "@lingui/core/macro"
 import { $allSystemsById } from "@/lib/stores"
 import { useStore } from "@nanostores/react"
 
+// Unit names and their corresponding number of seconds for converting docker status strings
+const unitSeconds = [["s", 1], ["mi", 60], ["h", 3600], ["d", 86400], ["w", 604800], ["mo", 2592000]] as const
+// Convert docker status string to number of seconds ("Up X minutes", "Up X hours", etc.)
+function getStatusValue(status: string): number {
+	const [_, num, unit] = status.split(" ")
+	const numValue = Number(num)
+	for (const [unitName, value] of unitSeconds) {
+		if (unit.startsWith(unitName)) {
+			return numValue * value
+		}
+	}
+	return 0
+}
+
 export const containerChartCols: ColumnDef<ContainerRecord>[] = [
 	{
 		id: "name",
@@ -26,7 +40,7 @@ export const containerChartCols: ColumnDef<ContainerRecord>[] = [
 		accessorFn: (record) => record.name,
 		header: ({ column }) => <HeaderButton column={column} name={t`Name`} Icon={ContainerIcon} />,
 		cell: ({ getValue }) => {
-			return <span className="ms-1.5 xl:w-45 block truncate">{getValue() as string}</span>
+			return <span className="ms-1.5 xl:w-48 block truncate">{getValue() as string}</span>
 		},
 	},
 	{
@@ -41,18 +55,18 @@ export const containerChartCols: ColumnDef<ContainerRecord>[] = [
 		header: ({ column }) => <HeaderButton column={column} name={t`System`} Icon={ServerIcon} />,
 		cell: ({ getValue }) => {
 			const allSystems = useStore($allSystemsById)
-			return <span className="ms-1.5 xl:w-32 block truncate">{allSystems[getValue() as string]?.name ?? ""}</span>
+			return <span className="ms-1.5 xl:w-34 block truncate">{allSystems[getValue() as string]?.name ?? ""}</span>
 		},
 	},
-	{
-		id: "id",
-		accessorFn: (record) => record.id,
-		sortingFn: (a, b) => a.original.id.localeCompare(b.original.id),
-		header: ({ column }) => <HeaderButton column={column} name="ID" Icon={HashIcon} />,
-		cell: ({ getValue }) => {
-			return <span className="ms-1.5 me-3 font-mono">{getValue() as string}</span>
-		},
-	},
+	// {
+	// 	id: "id",
+	// 	accessorFn: (record) => record.id,
+	// 	sortingFn: (a, b) => a.original.id.localeCompare(b.original.id),
+	// 	header: ({ column }) => <HeaderButton column={column} name="ID" Icon={HashIcon} />,
+	// 	cell: ({ getValue }) => {
+	// 		return <span className="ms-1.5 me-3 font-mono">{getValue() as string}</span>
+	// 	},
+	// },
 	{
 		id: "cpu",
 		accessorFn: (record) => record.cpu,
@@ -112,9 +126,19 @@ export const containerChartCols: ColumnDef<ContainerRecord>[] = [
 		},
 	},
 	{
+		id: "image",
+		sortingFn: (a, b) => a.original.image.localeCompare(b.original.image),
+		accessorFn: (record) => record.image,
+		header: ({ column }) => <HeaderButton column={column} name={t({ message: "Image", context: "Docker image" })} Icon={LayersIcon} />,
+		cell: ({ getValue }) => {
+			return <span className="ms-1.5 xl:w-40 block truncate">{getValue() as string}</span>
+		},
+	},
+	{
 		id: "status",
 		accessorFn: (record) => record.status,
 		invertSorting: true,
+		sortingFn: (a, b) => getStatusValue(a.original.status) - getStatusValue(b.original.status),
 		header: ({ column }) => <HeaderButton column={column} name={t`Status`} Icon={HourglassIcon} />,
 		cell: ({ getValue }) => {
 			return <span className="ms-1.5 w-25 block truncate">{getValue() as string}</span>

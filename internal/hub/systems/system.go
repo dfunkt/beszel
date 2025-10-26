@@ -196,9 +196,10 @@ func createContainerRecords(app core.App, data []*container.Stats, systemId stri
 	valueStrings := make([]string, 0, len(data))
 	for i, container := range data {
 		suffix := fmt.Sprintf("%d", i)
-		valueStrings = append(valueStrings, fmt.Sprintf("({:id%[1]s}, {:system}, {:name%[1]s}, {:status%[1]s}, {:health%[1]s}, {:cpu%[1]s}, {:memory%[1]s}, {:net%[1]s}, {:updated})", suffix))
+		valueStrings = append(valueStrings, fmt.Sprintf("({:id%[1]s}, {:system}, {:name%[1]s}, {:image%[1]s}, {:status%[1]s}, {:health%[1]s}, {:cpu%[1]s}, {:memory%[1]s}, {:net%[1]s}, {:updated})", suffix))
 		params["id"+suffix] = container.Id
 		params["name"+suffix] = container.Name
+		params["image"+suffix] = container.Image
 		params["status"+suffix] = container.Status
 		params["health"+suffix] = container.Health
 		params["cpu"+suffix] = container.Cpu
@@ -206,7 +207,7 @@ func createContainerRecords(app core.App, data []*container.Stats, systemId stri
 		params["net"+suffix] = container.NetworkSent + container.NetworkRecv
 	}
 	queryString := fmt.Sprintf(
-		"INSERT INTO containers (id, system, name, status, health, cpu, memory, net, updated) VALUES %s ON CONFLICT(id) DO UPDATE SET system = excluded.system, name = excluded.name, status = excluded.status, health = excluded.health, cpu = excluded.cpu, memory = excluded.memory, net = excluded.net, updated = excluded.updated",
+		"INSERT INTO containers (id, system, name, image, status, health, cpu, memory, net, updated) VALUES %s ON CONFLICT(id) DO UPDATE SET system = excluded.system, name = excluded.name, image = excluded.image, status = excluded.status, health = excluded.health, cpu = excluded.cpu, memory = excluded.memory, net = excluded.net, updated = excluded.updated",
 		strings.Join(valueStrings, ","),
 	)
 	_, err := app.DB().NewQuery(queryString).Bind(params).Execute()
@@ -337,6 +338,45 @@ func (sys *System) FetchContainerLogsFromAgent(containerID string) (string, erro
 	}
 	// fetch via SSH
 	return sys.fetchStringFromAgentViaSSH(common.GetContainerLogs, common.ContainerLogsRequest{ContainerID: containerID}, "no logs in response")
+}
+
+// FetchSmartDataFromAgent fetches SMART data from the agent
+func (sys *System) FetchSmartDataFromAgent() (map[string]any, error) {
+	// fetch via websocket
+	if sys.WsConn != nil && sys.WsConn.IsConnected() {
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		return sys.WsConn.RequestSmartData(ctx)
+	}
+	// fetch via SSH
+	var result map[string]any
+	err := sys.runSSHOperation(5*time.Second, 1, func(session *ssh.Session) (bool, error) {
+		stdout, err := session.StdoutPipe()
+		if err != nil {
+			return false, err
+		}
+		stdin, stdinErr := session.StdinPipe()
+		if stdinErr != nil {
+			return false, stdinErr
+		}
+		if err := session.Shell(); err != nil {
+			return false, err
+		}
+		req := common.HubRequest[any]{Action: common.GetSmartData}
+		_ = cbor.NewEncoder(stdin).Encode(req)
+		_ = stdin.Close()
+		var resp common.AgentResponse
+		if err := cbor.NewDecoder(stdout).Decode(&resp); err != nil {
+			return false, err
+		}
+		// Convert to generic map for JSON response
+		result = make(map[string]any, len(resp.SmartData))
+		for k, v := range resp.SmartData {
+			result[k] = v
+		}
+		return false, nil
+	})
+	return result, err
 }
 
 // fetchDataViaSSH handles fetching data using SSH.
