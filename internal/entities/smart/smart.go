@@ -1,5 +1,10 @@
 package smart
 
+import (
+	"strconv"
+	"strings"
+)
+
 // Common types
 type VersionInfo [2]int
 
@@ -129,30 +134,97 @@ type AtaSmartAttributes struct {
 }
 
 type AtaSmartAttribute struct {
-	ID         uint16         `json:"id"`
-	Name       string         `json:"name"`
-	Value      uint16         `json:"value"`
-	Worst      uint16         `json:"worst"`
-	Thresh     uint16         `json:"thresh"`
-	WhenFailed string         `json:"when_failed"`
-	Flags      AttributeFlags `json:"flags"`
-	Raw        RawValue       `json:"raw"`
+	ID         uint16 `json:"id"`
+	Name       string `json:"name"`
+	Value      uint16 `json:"value"`
+	Worst      uint16 `json:"worst"`
+	Thresh     uint16 `json:"thresh"`
+	WhenFailed string `json:"when_failed"`
+	// Flags      AttributeFlags `json:"flags"`
+	Raw RawValue `json:"raw"`
 }
 
-type AttributeFlags struct {
-	Value         int    `json:"value"`
-	String        string `json:"string"`
-	Prefailure    bool   `json:"prefailure"`
-	UpdatedOnline bool   `json:"updated_online"`
-	Performance   bool   `json:"performance"`
-	ErrorRate     bool   `json:"error_rate"`
-	EventCount    bool   `json:"event_count"`
-	AutoKeep      bool   `json:"auto_keep"`
-}
+// type AttributeFlags struct {
+// 	Value         int    `json:"value"`
+// 	String        string `json:"string"`
+// 	Prefailure    bool   `json:"prefailure"`
+// 	UpdatedOnline bool   `json:"updated_online"`
+// 	Performance   bool   `json:"performance"`
+// 	ErrorRate     bool   `json:"error_rate"`
+// 	EventCount    bool   `json:"event_count"`
+// 	AutoKeep      bool   `json:"auto_keep"`
+// }
 
 type RawValue struct {
-	Value  uint64 `json:"value"`
-	String string `json:"string"`
+	Value  SmartRawValue `json:"value"`
+	String string        `json:"string"`
+}
+
+type SmartRawValue uint64
+
+// handles when drives report strings like "0h+0m+0.000s" or "7344 (253d 8h)" for power on hours
+func (v *SmartRawValue) UnmarshalJSON(data []byte) error {
+	trimmed := strings.TrimSpace(string(data))
+	if len(trimmed) == 0 || trimmed == "null" {
+		*v = 0
+		return nil
+	}
+
+	if trimmed[0] != '"' {
+		parsed, err := strconv.ParseUint(trimmed, 0, 64)
+		if err != nil {
+			return err
+		}
+		*v = SmartRawValue(parsed)
+		return nil
+	}
+
+	valueStr, err := strconv.Unquote(trimmed)
+	if err != nil {
+		return err
+	}
+	if valueStr == "" {
+		*v = 0
+		return nil
+	}
+
+	if parsed, err := strconv.ParseUint(valueStr, 0, 64); err == nil {
+		*v = SmartRawValue(parsed)
+		return nil
+	}
+
+	if idx := strings.IndexRune(valueStr, 'h'); idx >= 0 {
+		hoursPart := strings.TrimSpace(valueStr[:idx])
+		if hoursPart == "" {
+			*v = 0
+			return nil
+		}
+		if parsed, err := strconv.ParseFloat(hoursPart, 64); err == nil {
+			*v = SmartRawValue(uint64(parsed))
+			return nil
+		}
+	}
+
+	if digits := leadingDigitPrefix(valueStr); digits != "" {
+		if parsed, err := strconv.ParseUint(digits, 0, 64); err == nil {
+			*v = SmartRawValue(parsed)
+			return nil
+		}
+	}
+
+	*v = 0
+	return nil
+}
+
+func leadingDigitPrefix(value string) string {
+	var builder strings.Builder
+	for _, r := range value {
+		if r < '0' || r > '9' {
+			break
+		}
+		builder.WriteRune(r)
+	}
+	return builder.String()
 }
 
 // type PowerOnTimeInfo struct {
@@ -161,6 +233,11 @@ type RawValue struct {
 
 type TemperatureInfo struct {
 	Current uint8 `json:"current"`
+}
+
+type TemperatureInfoScsi struct {
+	Current   uint8 `json:"current"`
+	DriveTrip uint8 `json:"drive_trip"`
 }
 
 // type SelectiveSelfTestTable struct {
@@ -211,6 +288,8 @@ type SmartInfoForSata struct {
 	// Wwn               WwnInfo            `json:"wwn"`
 	FirmwareVersion string       `json:"firmware_version"`
 	UserCapacity    UserCapacity `json:"user_capacity"`
+	ScsiVendor      string       `json:"scsi_vendor"`
+	ScsiProduct     string       `json:"scsi_product"`
 	// LogicalBlockSize  int                `json:"logical_block_size"`
 	// PhysicalBlockSize int                `json:"physical_block_size"`
 	// RotationRate      int                `json:"rotation_rate"`
@@ -231,6 +310,54 @@ type SmartInfoForSata struct {
 	// AtaSmartErrorLog             AtaSmartErrorLog             `json:"ata_smart_error_log"`
 	// AtaSmartSelfTestLog          AtaSmartSelfTestLog          `json:"ata_smart_self_test_log"`
 	// AtaSmartSelectiveSelfTestLog AtaSmartSelectiveSelfTestLog `json:"ata_smart_selective_self_test_log"`
+}
+
+type ScsiErrorCounter struct {
+	ErrorsCorrectedByECCFast         uint64 `json:"errors_corrected_by_eccfast"`
+	ErrorsCorrectedByECCDelayed      uint64 `json:"errors_corrected_by_eccdelayed"`
+	ErrorsCorrectedByRereadsRewrites uint64 `json:"errors_corrected_by_rereads_rewrites"`
+	TotalErrorsCorrected             uint64 `json:"total_errors_corrected"`
+	CorrectionAlgorithmInvocations   uint64 `json:"correction_algorithm_invocations"`
+	GigabytesProcessed               string `json:"gigabytes_processed"`
+	TotalUncorrectedErrors           uint64 `json:"total_uncorrected_errors"`
+}
+
+type ScsiErrorCounterLog struct {
+	Read   ScsiErrorCounter `json:"read"`
+	Write  ScsiErrorCounter `json:"write"`
+	Verify ScsiErrorCounter `json:"verify"`
+}
+
+type ScsiStartStopCycleCounter struct {
+	YearOfManufacture                          string `json:"year_of_manufacture"`
+	WeekOfManufacture                          string `json:"week_of_manufacture"`
+	SpecifiedCycleCountOverDeviceLifetime      uint64 `json:"specified_cycle_count_over_device_lifetime"`
+	AccumulatedStartStopCycles                 uint64 `json:"accumulated_start_stop_cycles"`
+	SpecifiedLoadUnloadCountOverDeviceLifetime uint64 `json:"specified_load_unload_count_over_device_lifetime"`
+	AccumulatedLoadUnloadCycles                uint64 `json:"accumulated_load_unload_cycles"`
+}
+
+type PowerOnTimeScsi struct {
+	Hours   uint64 `json:"hours"`
+	Minutes uint64 `json:"minutes"`
+}
+
+type SmartInfoForScsi struct {
+	Smartctl                  SmartctlInfoLegacy        `json:"smartctl"`
+	Device                    DeviceInfo                `json:"device"`
+	ScsiVendor                string                    `json:"scsi_vendor"`
+	ScsiProduct               string                    `json:"scsi_product"`
+	ScsiModelName             string                    `json:"scsi_model_name"`
+	ScsiRevision              string                    `json:"scsi_revision"`
+	ScsiVersion               string                    `json:"scsi_version"`
+	SerialNumber              string                    `json:"serial_number"`
+	UserCapacity              UserCapacity              `json:"user_capacity"`
+	Temperature               TemperatureInfoScsi       `json:"temperature"`
+	SmartStatus               SmartStatusInfo           `json:"smart_status"`
+	PowerOnTime               PowerOnTimeScsi           `json:"power_on_time"`
+	ScsiStartStopCycleCounter ScsiStartStopCycleCounter `json:"scsi_start_stop_cycle_counter"`
+	ScsiGrownDefectList       uint64                    `json:"scsi_grown_defect_list"`
+	ScsiErrorCounterLog       ScsiErrorCounterLog       `json:"scsi_error_counter_log"`
 }
 
 // type AtaSmartErrorLog struct {

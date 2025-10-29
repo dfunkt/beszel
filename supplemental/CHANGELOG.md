@@ -1,14 +1,38 @@
+## 0.15.1
+
+- Add `SMART_DEVICES` environment variable to specify devices and types. (#373, #1335)
+
+- Add support for `scsi`, `sntasmedia`, and `sntrealtek` S.M.A.R.T. types. (#373, #1335)
+
+- Handle power-on time attributes that are formatted as strings (e.g., "0h+0m+0.000s").
+
+- Skip virtual disks in S.M.A.R.T. monitoring. (#1332)
+
+- Add sorting to the S.M.A.R.T. table. (#1333)
+
+- Fix incorrect disk rendering in S.M.A.R.T. device details. (#1336)
+
+- Fix `SHARE_ALL_SYSTEMS` setting not working for containers. (#1334)
+
+- Fix text contrast issue when container details are disabled. (#1324)
+
 ## 0.15.0
 
 - Add initial S.M.A.R.T. support for disk health monitoring. (#962)
+
+- Add `henrygd/beszel-agent:alpine` Docker image and include `smartmontools` in all non-base agent images.
+
+- Remove environment variables from container details (#1305)
 
 - Add `CONTAINER_DETAILS` environment variable to control access to container logs and info APIs. (#1305)
 
 - Improve temperature chart by allowing y-axis to start above 0 for better readability. (#1307)
 
-- Add `henrygd/beszel-agent:alpine` Docker image and include `smartmontools` in all non-base agent images.
-
 - Improve battery detection logic. (#1287)
+
+- Limit docker log size to prevent possible memory leak. (#1322)
+
+- Update Go dependencies.
 
 ## 0.14.1
 
