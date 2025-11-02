@@ -1,4 +1,5 @@
 name: Sync Fork with Upstream
+permissions: {}
 
 on:
   workflow_dispatch:
@@ -11,6 +12,10 @@ jobs:
   Sync:
     runs-on: ubuntu-latest
 
+    permissions:
+      contents: write # needed for pushing the new branch
+      pull-requests: write # needed for opening a PR with the new branch
+
     steps:
       - name: Generate GitHub App Token
         id: generate_token
@@ -19,17 +24,6 @@ jobs:
           app-id: ${{ secrets.APP_ID }}
           private-key: ${{ secrets.PRIVATE_KEY }}
 
-      - name: Checkout
-        uses: actions/checkout@v5
-        with:
-          fetch-depth: 0
-          token: ${{ steps.generate_token.outputs.token }}
-
-      - name: Configure Git
-        run: |
-          git config user.name "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-
       - name: Get latest upstream release
         id: check
         env:
@@ -37,7 +31,7 @@ jobs:
         run: |
           # Get latest release from upstream using GitHub API
           LATEST_RELEASE=$(gh release list \
-            --repo "${{ env.SOURCE_REPO }}" \
+            --repo "${SOURCE_REPO}" \
             --limit 1 \
             --json tagName,isPrerelease \
             --jq '.[] | select(.isPrerelease == false) | .tagName')
@@ -54,26 +48,35 @@ jobs:
             echo "New release $LATEST_RELEASE found!"
           fi
 
-      - name: Add upstream remote
+      - name: Checkout
         if: steps.check.outputs.has_new == 'true'
-        run: |
-          git remote add upstream https://github.com/${{ env.SOURCE_REPO }}.git
-          git fetch upstream
+        uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+          token: ${{ steps.generate_token.outputs.token }}
+          persist-credentials: false
 
-      - name: Create PR for new release
+      - name: Sync repo and create PR for new release
         if: steps.check.outputs.has_new == 'true'
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ steps.check.outputs.latest_tag }}
         run: |
-          TAG=${{ steps.check.outputs.latest_tag }}
-          BRANCH="sync-upstream-$TAG"
+          gh auth setup-git
 
-          git checkout -b "$BRANCH" "$TAG"
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+          git remote add upstream "https://github.com/${SOURCE_REPO}.git"
+          git fetch upstream
+
+          BRANCH="sync-upstream-${TAG}"
+
+          git checkout -b "$BRANCH" "${TAG}"
           git push origin "$BRANCH"
 
           gh pr create \
-            --repo "${{ env.DESTINATION_REPO }}" \
-            --title "Sync with upstream release $TAG" \
-            --body "Auto-sync with upstream release $TAG from parent repository" \
-            --base "main" \
+            --repo "${DESTINATION_REPO}" \
+            --title "Sync with upstream release ${TAG}" \
+            --body "Auto-sync with upstream release ${TAG} from parent repository" \
             --head "$BRANCH"
