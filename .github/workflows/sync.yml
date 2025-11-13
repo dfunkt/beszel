@@ -53,19 +53,15 @@ jobs:
         uses: actions/checkout@v5
         with:
           fetch-depth: 0
-          token: ${{ steps.generate_token.outputs.token }}
           persist-credentials: false
 
       - name: Sync repo and create PR for new release
         if: steps.check.outputs.has_new == 'true'
         env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_TOKEN: ${{ steps.generate_token.outputs.token }}
           TAG: ${{ steps.check.outputs.latest_tag }}
         run: |
           gh auth setup-git
-
-          git config user.name "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
 
           git remote add upstream "https://github.com/${SOURCE_REPO}.git"
           git fetch upstream
