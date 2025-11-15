@@ -1,3 +1,6 @@
+//go:generate -command fetchsmartctl go run ./tools/fetchsmartctl
+//go:generate fetchsmartctl -out ./smartmontools/smartctl.exe -url https://static.beszel.dev/bin/smartctl/smartctl-nc.exe -sha 3912249c3b329249aa512ce796fd1b64d7cbd8378b68ad2756b39163d9c30b47
+
 package agent
 
 import (
@@ -21,11 +24,12 @@ import (
 // SmartManager manages data collection for SMART devices
 type SmartManager struct {
 	sync.Mutex
-	SmartDataMap map[string]*smart.SmartData
-	SmartDevices []*DeviceInfo
-	refreshMutex sync.Mutex
-	lastScanTime time.Time
-	binPath      string
+	SmartDataMap    map[string]*smart.SmartData
+	SmartDevices    []*DeviceInfo
+	refreshMutex    sync.Mutex
+	lastScanTime    time.Time
+	binPath         string
+	excludedDevices map[string]struct{}
 }
 
 type scanOutput struct {
@@ -182,6 +186,7 @@ func (sm *SmartManager) ScanDevices(force bool) error {
 	}
 
 	finalDevices := mergeDeviceLists(currentDevices, scannedDevices, configuredDevices)
+	finalDevices = sm.filterExcludedDevices(finalDevices)
 	sm.updateSmartDevices(finalDevices)
 
 	if len(finalDevices) == 0 {
@@ -227,6 +232,47 @@ func (sm *SmartManager) parseConfiguredDevices(config string) ([]*DeviceInfo, er
 	}
 
 	return devices, nil
+}
+
+func (sm *SmartManager) refreshExcludedDevices() {
+	rawValue, _ := GetEnv("EXCLUDE_SMART")
+	sm.excludedDevices = make(map[string]struct{})
+
+	for entry := range strings.SplitSeq(rawValue, ",") {
+		device := strings.TrimSpace(entry)
+		if device == "" {
+			continue
+		}
+		sm.excludedDevices[device] = struct{}{}
+	}
+}
+
+func (sm *SmartManager) isExcludedDevice(deviceName string) bool {
+	_, exists := sm.excludedDevices[deviceName]
+	return exists
+}
+
+func (sm *SmartManager) filterExcludedDevices(devices []*DeviceInfo) []*DeviceInfo {
+	if devices == nil {
+		return []*DeviceInfo{}
+	}
+
+	excluded := sm.excludedDevices
+	if len(excluded) == 0 {
+		return devices
+	}
+
+	filtered := make([]*DeviceInfo, 0, len(devices))
+	for _, device := range devices {
+		if device == nil || device.Name == "" {
+			continue
+		}
+		if _, skip := excluded[device.Name]; skip {
+			continue
+		}
+		filtered = append(filtered, device)
+	}
+	return filtered
 }
 
 // detectSmartOutputType inspects sections that are unique to each smartctl
@@ -375,6 +421,10 @@ func (sm *SmartManager) parseSmartOutput(deviceInfo *DeviceInfo, output []byte) 
 // Uses -n standby to avoid waking up sleeping disks, but bypasses standby mode
 // for initial data collection when no cached data exists
 func (sm *SmartManager) CollectSmart(deviceInfo *DeviceInfo) error {
+	if deviceInfo != nil && sm.isExcludedDevice(deviceInfo.Name) {
+		return errNoValidSmartData
+	}
+
 	// slog.Info("collecting SMART data", "device", deviceInfo.Name, "type", deviceInfo.Type, "has_existing_data", sm.hasDataForDevice(deviceInfo.Name))
 
 	// Check if we have any existing data for this device
@@ -406,10 +456,10 @@ func (sm *SmartManager) CollectSmart(deviceInfo *DeviceInfo) error {
 
 	if !hasValidData {
 		if err != nil {
-			slog.Debug("smartctl failed", "device", deviceInfo.Name, "err", err)
+			slog.Info("smartctl failed", "device", deviceInfo.Name, "err", err)
 			return err
 		}
-		slog.Debug("no valid SMART data found", "device", deviceInfo.Name)
+		slog.Info("no valid SMART data found", "device", deviceInfo.Name)
 		return errNoValidSmartData
 	}
 
@@ -879,11 +929,20 @@ func (sm *SmartManager) parseSmartForNvme(output []byte) (bool, int) {
 
 // detectSmartctl checks if smartctl is installed, returns an error if not
 func (sm *SmartManager) detectSmartctl() (string, error) {
+	isWindows := runtime.GOOS == "windows"
+
+	// Load embedded smartctl.exe for Windows amd64 builds.
+	if isWindows && runtime.GOARCH == "amd64" {
+		if path, err := ensureEmbeddedSmartctl(); err == nil {
+			return path, nil
+		}
+	}
+
 	if path, err := exec.LookPath("smartctl"); err == nil {
 		return path, nil
 	}
 	locations := []string{}
-	if runtime.GOOS == "windows" {
+	if isWindows {
 		locations = append(locations,
 			"C:\\Program Files\\smartmontools\\bin\\smartctl.exe",
 		)
@@ -903,6 +962,7 @@ func NewSmartManager() (*SmartManager, error) {
 	sm := &SmartManager{
 		SmartDataMap: make(map[string]*smart.SmartData),
 	}
+	sm.refreshExcludedDevices()
 	path, err := sm.detectSmartctl()
 	if err != nil {
 		slog.Debug(err.Error())
